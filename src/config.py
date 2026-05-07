@@ -21,8 +21,8 @@ class Adxl345Config:
 
 @dataclass(frozen=True)
 class Ds18b20Config:
-    poll_s: float = 1.0
-    base_path: str = "/sys/bus/w1/devices"
+    poll_s: float = 1.0                     # polling interval in seconds
+    base_path: str = "/sys/bus/w1/devices"  # run `sudo raspi-config` -> Interfacing Options -> OneWire -> Enable
 
 
 @dataclass(frozen=True)

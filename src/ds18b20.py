@@ -23,6 +23,13 @@ def _find_devices(base_path: str = "/sys/bus/w1/devices") -> list[Path]:
 
 
 def _parse_w1_slave(text: str) -> float:
+    """
+    Parse the w1_slave file and return the temperature in Celsius.
+    Example of w1_slave file:
+    kienphan@raspberrypi:~/Documents/RPi3B_Stepper_motor_with_sensors $ cat /sys/bus/w1/devices/28-24020001ab4c/w1_slave 
+    10 02 55 00 7f ff 0c 10 db : crc=db YES
+    10 02 55 00 7f ff 0c 10 db t=33000
+    """
     lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
     if len(lines) < 2:
         raise Ds18b20Error("Unexpected w1_slave contents")
