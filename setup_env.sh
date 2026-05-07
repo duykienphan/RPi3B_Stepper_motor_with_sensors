@@ -70,5 +70,5 @@ fi
 
 # Summary
 echo ""
-echo "Done. To activate later:"
-echo "  source \"$ACTIVATE_SCRIPT\""
+echo "Done. Venv activating..."
+source \"$ACTIVATE_SCRIPT\"
