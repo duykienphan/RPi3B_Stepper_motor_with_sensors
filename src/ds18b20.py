@@ -65,3 +65,7 @@ class Ds18b20:
         c = _parse_w1_slave(text)
         return Ds18b20Sample(t=t, c=c, device_id=path.parent.name)
 
+if __name__ == "__main__":
+    ds = Ds18b20(base_path="/sys/bus/w1/devices")
+    print(ds.list_device_ids())
+    print(ds.read_c())
