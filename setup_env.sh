@@ -12,7 +12,7 @@ REQUIREMENTS_FILE="$ROOT_DIR/requirements.txt"
 PYTHON_BIN=""
 if command -v "python${PYTHON_VERSION}" >/dev/null 2>&1; then
     PYTHON_BIN="$(command -v "python${PYTHON_VERSION}")"
-elif command -v "python3.${PYTHON_VERSION#3.}" >/dev/null 2>&1; then``
+elif command -v "python3.${PYTHON_VERSION#3.}" >/dev/null 2>&1; then
     # Same as python3.13 when PYTHON_VERSION=3.13
     PYTHON_BIN="$(command -v "python3.${PYTHON_VERSION#3.}")"
 elif command -v python3 >/dev/null 2>&1; then
@@ -34,9 +34,13 @@ if [ "$PYVER" != "$PYTHON_VERSION" ]; then
 fi
 echo "Using Python ${PYTHON_VERSION} at: $PYTHON_BIN"
 
-# Create virtual environment
-echo "Creating virtual environment at $VENV_DIR"
-"$PYTHON_BIN" -m venv "$VENV_DIR"
+# Create virtual environment (if needed)
+if [ -d "$VENV_DIR" ]; then
+    echo "Virtual environment already exists at $VENV_DIR (skipping creation)"
+else
+    echo "Creating virtual environment at $VENV_DIR"
+    "$PYTHON_BIN" -m venv "$VENV_DIR"
+fi
 
 # Detect OS type for activation path
 if [[ "$OSTYPE" == "msys" || "$OSTYPE" == "cygwin" ]]; then
