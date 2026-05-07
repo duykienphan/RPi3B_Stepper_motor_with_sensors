@@ -1,36 +1,23 @@
+# python3 -m src.main
 from __future__ import annotations
 
-import queue
+import csv
 import signal
 import threading
 import time
-from dataclasses import asdict
+from pathlib import Path
 
-from .adxl345 import Adxl345, Adxl345Error
-from .config import AppConfig
-from .ds18b20 import Ds18b20, Ds18b20Error
-from .logger import CsvLogger, LogItem
-from .motor_tb6600 import (
-    Enable,
-    MoveSteps,
-    MotorError,
-    MotorStatus,
-    SetSpeed,
-    Stop,
-    Tb6600MotorController,
-)
+from src.adxl345 import Adxl345, Adxl345Error
+from src.config import AppConfig
+from src.ds18b20 import Ds18b20, Ds18b20Error
 
 
-class PeriodicSampler(threading.Thread):
-    def __init__(self, *, name: str, period_s: float, fn, out_q: queue.Queue[LogItem]):
+class PeriodicWorker(threading.Thread):
+    def __init__(self, *, name: str, period_s: float, fn, stop_evt: threading.Event):
         super().__init__(daemon=True, name=name)
         self._period = max(0.001, float(period_s))
         self._fn = fn
-        self._q = out_q
-        self._stop_evt = threading.Event()
-
-    def stop(self) -> None:
-        self._stop_evt.set()
+        self._stop_evt = stop_evt
 
     def run(self) -> None:
         nxt = time.time()
@@ -41,22 +28,29 @@ class PeriodicSampler(threading.Thread):
                 continue
             nxt += self._period
             try:
-                item = self._fn()
-                self._q.put(item)
+                self._fn()
             except Exception:
-                # keep sampling loop alive even if a read fails occasionally
+                # Keep worker loop alive even if a read/write fails occasionally.
                 continue
 
 
-def run_app(cfg: AppConfig) -> None:
-    log_q: queue.Queue[LogItem] = queue.Queue(maxsize=5000)
+def _append_csv_row(path: str, *, fieldnames: list[str], row: dict[str, object]) -> None:
+    p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    exists = p.exists()
+    with p.open("a", newline="", encoding="utf-8") as fp:
+        w = csv.DictWriter(fp, fieldnames=fieldnames)
+        if not exists or fp.tell() == 0:
+            w.writeheader()
+        w.writerow(row)
 
-    logger = CsvLogger(out_path=cfg.logging.csv_path, in_q=log_q, flush_every_n=cfg.logging.flush_every_n)
-    logger.start()
+
+def run_app(cfg: AppConfig) -> None:
+    stop_evt = threading.Event()
 
     # Sensors
-    adxl = None
     ds = Ds18b20(base_path=cfg.ds18b20.base_path)
+    adxl: Adxl345 | None = None
 
     try:
         adxl = Adxl345(
@@ -70,38 +64,40 @@ def run_app(cfg: AppConfig) -> None:
     except Exception as e:
         raise Adxl345Error(str(e))
 
-    def adxl_fn() -> LogItem:
+    ds_csv = "ds18b20_data.csv"
+    adxl_csv = "adxl345_data.csv"
+
+    def adxl_fn() -> None:
+        assert adxl is not None
         s = adxl.sample()
-        return LogItem(t=s.t, kind="adxl345", data={"x_g": s.x_g, "y_g": s.y_g, "z_g": s.z_g})
+        _append_csv_row(
+            adxl_csv,
+            fieldnames=["t", "x_g", "y_g", "z_g"],
+            row={"t": f"{s.t:.6f}", "x_g": s.x_g, "y_g": s.y_g, "z_g": s.z_g},
+        )
 
-    def ds_fn() -> LogItem:
+    def ds_fn() -> None:
         s = ds.read_c()
-        return LogItem(t=s.t, kind="ds18b20", data={"c": s.c, "device_id": s.device_id})
+        _append_csv_row(
+            ds_csv,
+            fieldnames=["t", "c", "device_id"],
+            row={"t": f"{s.t:.6f}", "c": s.c, "device_id": s.device_id},
+        )
 
-    adxl_sampler = PeriodicSampler(
-        name="Adxl345Sampler",
+    adxl_worker = PeriodicWorker(
+        name="Adxl345Worker",
         period_s=1.0 / max(1.0, cfg.adxl345.sample_hz),
         fn=adxl_fn,
-        out_q=log_q,
+        stop_evt=stop_evt,
     )
-    ds_sampler = PeriodicSampler(name="Ds18b20Sampler", period_s=cfg.ds18b20.poll_s, fn=ds_fn, out_q=log_q)
-    adxl_sampler.start()
-    ds_sampler.start()
-
-    # Motor
-    status = MotorStatus()
-    motor = Tb6600MotorController(
-        step_gpio=cfg.stepper.pins.step_gpio,
-        dir_gpio=cfg.stepper.pins.dir_gpio,
-        ena_gpio=cfg.stepper.pins.ena_gpio,
-        invert_dir=cfg.stepper.invert_dir,
-        step_pulse_us=cfg.stepper.step_pulse_us,
-        status=status,
+    ds_worker = PeriodicWorker(
+        name="Ds18b20Worker",
+        period_s=cfg.ds18b20.poll_s,
+        fn=ds_fn,
+        stop_evt=stop_evt,
     )
-    motor.start()
-    motor.command_queue.put(Enable(True))
-
-    stop_evt = threading.Event()
+    adxl_worker.start()
+    ds_worker.start()
 
     def _handle(_sig, _frame) -> None:
         stop_evt.set()
@@ -109,66 +105,26 @@ def run_app(cfg: AppConfig) -> None:
     signal.signal(signal.SIGINT, _handle)
     signal.signal(signal.SIGTERM, _handle)
 
-    # Demo policy loop:
-    # - Start a gentle continuous speed
-    # - Every 10 seconds, queue a short move (preempt background, then resume)
-    motor.command_queue.put(SetSpeed(steps_per_sec=400.0))
-    last_move = time.time()
-
     try:
         while not stop_evt.is_set():
             time.sleep(0.2)
-
-            # Periodically log motor status
-            log_q.put(
-                LogItem(
-                    t=time.time(),
-                    kind="motor",
-                    data={
-                        "enabled": status.enabled,
-                        "mode": status.mode,
-                        "target_steps_per_sec": status.target_steps_per_sec,
-                        "position_steps": status.position_steps,
-                        "last_error": status.last_error,
-                    },
-                )
-            )
-
-            if time.time() - last_move > 10.0:
-                last_move = time.time()
-                motor.command_queue.put(MoveSteps(steps=800, max_steps_per_sec=1200.0, accel_steps_per_sec2=3000.0))
     finally:
-        # Shutdown order: stop samplers, stop motor wave, stop logger.
-        adxl_sampler.stop()
-        ds_sampler.stop()
-        motor.command_queue.put(Stop("coast"))
-        motor.stop()
+        stop_evt.set()
 
-        adxl_sampler.join(timeout=2.0)
-        ds_sampler.join(timeout=2.0)
-        try:
-            motor.join(timeout=2.0)
-        except Exception:
-            pass
-
-        try:
-            motor.close()
-        except Exception:
-            pass
+        adxl_worker.join(timeout=2.0)
+        ds_worker.join(timeout=2.0)
         try:
             if adxl is not None:
                 adxl.close()
         except Exception:
             pass
-        logger.stop()
-        logger.join(timeout=2.0)
 
 
 def main() -> None:
     cfg = AppConfig()
     try:
         run_app(cfg)
-    except (Adxl345Error, Ds18b20Error, MotorError) as e:
+    except (Adxl345Error, Ds18b20Error) as e:
         raise SystemExit(str(e))
 
 
