@@ -70,5 +70,4 @@ fi
 
 # Summary
 echo ""
-echo "Done. Venv activating..."
-source \"$ACTIVATE_SCRIPT\"
+echo "Done"
