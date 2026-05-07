@@ -137,10 +137,18 @@ class Adxl345:
         x, y, z = self.read_xyz_raw()
         # FULL_RES scale ~ 3.9 mg/LSB = 0.0039 g/LSB
         scale = 0.0039
-        return x * scale, y * scale, z * scale
+        return round(x * scale, 2), round(y * scale, 2), round(z * scale, 2)
 
     def sample(self) -> Adxl345Sample:
         t = time.time()
         xg, yg, zg = self.read_xyz_g()
         return Adxl345Sample(t=t, x_g=xg, y_g=yg, z_g=zg)
 
+
+if __name__ == "__main__":
+    adxl = Adxl345(bus=0, device=0, max_hz=5_000_000, mode=3)
+    adxl.configure(range_g=16, odr_hz=200.0)
+    while True:
+        sample = adxl.sample()
+        print(sample)
+        time.sleep(1)
