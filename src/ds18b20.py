@@ -67,5 +67,5 @@ class Ds18b20:
 
 if __name__ == "__main__":
     ds = Ds18b20(base_path="/sys/bus/w1/devices")
-    print(ds.list_device_ids())
+    # print(ds.list_device_ids())
     print(ds.read_c())
