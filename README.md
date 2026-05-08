@@ -73,3 +73,5 @@ Default settings are in `src/config.py` (`AppConfig`), including:
 - DS18B20 poll interval (`ds18b20.poll_s`, `ds18b20.base_path`)
 - ADXL345 SPI settings (`adxl345.spi.bus`, `adxl345.spi.device`, speed, mode) and sample rate (`adxl345.sample_hz`)
 
+## Reference
+https://www.instructables.com/Raspberry-Pi-Python-and-a-TB6600-Stepper-Motor-Dri/

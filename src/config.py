@@ -27,16 +27,19 @@ class Ds18b20Config:
 
 @dataclass(frozen=True)
 class Tb6600Pins:
-    step_gpio: int = 18
-    dir_gpio: int = 23
-    ena_gpio: int | None = 24
+    # GPIO mapping (BCM numbering): PUL=STEP, DIR, ENA
+    step_gpio: int = 17
+    dir_gpio: int = 27
+    ena_gpio: int | None = 22
 
 
 @dataclass(frozen=True)
 class StepperConfig:
     pins: Tb6600Pins = Tb6600Pins()
     steps_per_rev: int = 200
-    microstep: int = 16
+    # TB6600 microstep setting. With a typical 1.8° motor (200 steps/rev),
+    # microstep=8 => 200*8 = 1600 pulses per revolution.
+    microstep: int = 8
     invert_dir: bool = False
     step_pulse_us: int = 5
 
