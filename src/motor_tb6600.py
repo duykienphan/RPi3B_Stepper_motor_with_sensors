@@ -155,30 +155,20 @@ class Tb6600Motor:
 
 if __name__ == "__main__":
     # Demo based on your script (forward/reverse cycles)
-    PUL = 17
-    DIR = 27
-    ENA = 22
+    PUL = cfg.stepper.pins.step_gpio    
+    DIR = cfg.stepper.pins.dir_gpio
+    ENA = cfg.stepper.pins.ena_gpio
+    STEPS_PER_REV = 200*cfg.stepper.microstep
+    ACTIVE_HIGH_ENABLE = cfg.stepper.active_high_enable
+    DELAY = cfg.stepper.step_pulse_us / 1e6
+    CYCLES = 3
 
-    duration_fwd = 5000
-    duration_bwd = 5000
-    delay = 0.0000001
-    cycles = 3
-
-    print("PUL = GPIO 17 - RPi 3B-Pin #11")
-    print("DIR = GPIO 27 - RPi 3B-Pin #13")
-    print("ENA = GPIO 22 - RPi 3B-Pin #15")
-    print("Initialization Completed")
-    print(f"Duration Fwd set to {duration_fwd}")
-    print(f"Duration Bwd set to {duration_bwd}")
-    print(f"Speed set to {delay}")
-    print(f"number of Cycles to Run set to {cycles}")
-
-    motor = Tb6600Motor(step_gpio=PUL, dir_gpio=DIR, ena_gpio=ENA, pulses_per_rev=1600, active_high_enable=True)
+    motor = Tb6600Motor(step_gpio=PUL, dir_gpio=DIR, ena_gpio=ENA, pulses_per_rev=STEPS_PER_REV, active_high_enable=ACTIVE_HIGH_ENABLE)
     try:
-        for i in range(cycles):
-            motor.forward(duration_fwd, delay_s=delay)
+        for i in range(CYCLES):
+            motor.forward(STEPS_PER_REV, delay_s=DELAY)
             time.sleep(0.5)
-            motor.reverse(duration_bwd, delay_s=delay)
+            motor.reverse(STEPS_PER_REV, delay_s=DELAY)
             time.sleep(0.5)
             print(f"Number of cycles completed: {i + 1}")
             print(f"Number of cycles remaining: {cycles - (i + 1)}")

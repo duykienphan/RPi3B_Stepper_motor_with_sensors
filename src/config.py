@@ -42,6 +42,7 @@ class StepperConfig:
     microstep: int = 8
     invert_dir: bool = False
     step_pulse_us: int = 5
+    active_high_enable: bool = True
 
 
 @dataclass(frozen=True)
