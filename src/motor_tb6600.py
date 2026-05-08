@@ -5,9 +5,9 @@ from dataclasses import dataclass
 
 
 try:
-    import pigpio  # type: ignore
+    import RPi.GPIO as GPIO  # type: ignore
 except Exception:  # pragma: no cover
-    pigpio = None
+    GPIO = None
 
 
 class MotorError(RuntimeError):
@@ -17,23 +17,23 @@ class MotorError(RuntimeError):
 @dataclass
 class MotorStatus:
     enabled: bool = True
-    running: bool = False
-    direction: int = 0  # +1 forward, -1 reverse, 0 stopped
+    direction: int = 0  # +1 forward, -1 reverse, 0 stopped/unknown
     steps_sent: int = 0  # signed
 
 
 class Tb6600Motor:
     """
-    Minimal TB6600 stepper controller (PUL/DIR/ENA) using pigpio waves.
+    Minimal TB6600 stepper controller (PUL/DIR/ENA) using RPi.GPIO.
 
-    - forward()/reverse(): continuous spin at given speed
-    - stop(): stop continuous spin
+    - forward()/reverse(): drive PUL pin for N pulses (blocking)
+    - stop(): disable controller output (ENA)
     - move_steps()/move_revolutions(): blocking move and update counters
     - revolutions(): derived from steps_sent / pulses_per_rev
 
     Notes:
     - This uses BCM GPIO numbering.
-    - pigpio daemon must be running: `sudo pigpiod`
+    - This matches the common TB6600 wiring in your script:
+      ENA high=enable, DIR low=forward, DIR high=reverse.
     """
 
     def __init__(
@@ -44,179 +44,145 @@ class Tb6600Motor:
         ena_gpio: int | None,
         pulses_per_rev: int = 1600,
         invert_dir: bool = False,
-        step_pulse_us: int = 5,
+        active_high_enable: bool = True,
     ) -> None:
-        if pigpio is None:
-            raise MotorError("pigpio is not available. Install it on Raspberry Pi and run the pigpio daemon.")
+        if GPIO is None:
+            raise MotorError("RPi.GPIO is not available. Install it on Raspberry Pi: `sudo apt install python3-rpi.gpio`")
         if pulses_per_rev <= 0:
             raise MotorError("pulses_per_rev must be > 0")
-
-        self._pi = pigpio.pi()
-        if not self._pi.connected:
-            raise MotorError("Cannot connect to pigpio daemon. Start it with: `sudo pigpiod`")
 
         self._step = int(step_gpio)
         self._dir = int(dir_gpio)
         self._ena = int(ena_gpio) if ena_gpio is not None else None
 
         self._invert_dir = bool(invert_dir)
-        self._pulse_us = max(1, int(step_pulse_us))
         self._pulses_per_rev = int(pulses_per_rev)
+        self._active_high_enable = bool(active_high_enable)
 
         self.status = MotorStatus()
-        self._wave_id: int | None = None
 
         self._setup_gpio()
         self.enable(True)
 
     def close(self) -> None:
-        try:
-            self.stop()
-        finally:
-            self._pi.stop()
+        self.stop()
+        GPIO.cleanup()
 
     def _setup_gpio(self) -> None:
-        self._pi.set_mode(self._step, pigpio.OUTPUT)
-        self._pi.set_mode(self._dir, pigpio.OUTPUT)
+        GPIO.setmode(GPIO.BCM)
+        GPIO.setup(self._step, GPIO.OUT)
+        GPIO.setup(self._dir, GPIO.OUT)
         if self._ena is not None:
-            self._pi.set_mode(self._ena, pigpio.OUTPUT)
+            GPIO.setup(self._ena, GPIO.OUT)
 
-        self._pi.write(self._step, 0)
-        self._pi.write(self._dir, 0)
+        GPIO.output(self._step, GPIO.LOW)
+        GPIO.output(self._dir, GPIO.LOW)
         if self._ena is not None:
-            self._pi.write(self._ena, 0)  # default enabled
+            # Default disabled until enable(True) is called.
+            GPIO.output(self._ena, GPIO.LOW if self._active_high_enable else GPIO.HIGH)
 
     def enable(self, enabled: bool) -> None:
         self.status.enabled = bool(enabled)
         if self._ena is None:
             return
-        # ENA low=enable
-        self._pi.write(self._ena, 0 if enabled else 1)
-        if not enabled:
-            self.stop()
+        if self._active_high_enable:
+            GPIO.output(self._ena, GPIO.HIGH if enabled else GPIO.LOW)
+        else:
+            GPIO.output(self._ena, GPIO.LOW if enabled else GPIO.HIGH)
 
     def _set_dir(self, forward: bool) -> int:
-        val = 1 if forward else 0
+        # Match user's script: DIR low=forward, high=reverse
+        val = GPIO.LOW if forward else GPIO.HIGH
         if self._invert_dir:
-            val ^= 1
-        self._pi.write(self._dir, val)
+            val = GPIO.HIGH if val == GPIO.LOW else GPIO.LOW
+        GPIO.output(self._dir, val)
         return 1 if forward else -1
 
-    def _stop_wave(self) -> None:
-        if self._wave_id is None:
-            return
-        try:
-            self._pi.wave_tx_stop()
-        except Exception:
-            pass
-        try:
-            self._pi.wave_delete(self._wave_id)
-        except Exception:
-            pass
-        self._wave_id = None
-
-    def _build_wave(self, steps_per_sec: float) -> int:
-        sps = abs(float(steps_per_sec))
-        if sps <= 0.0:
-            raise MotorError("steps_per_sec must be > 0")
-        period_us = int(1_000_000 / sps)
-        hi_us = min(self._pulse_us, max(1, period_us // 2))
-        lo_us = max(1, period_us - hi_us)
-
-        self._pi.wave_add_new()
-        self._pi.wave_add_generic(
-            [
-                pigpio.pulse(1 << self._step, 0, hi_us),
-                pigpio.pulse(0, 1 << self._step, lo_us),
-            ]
-        )
-        wid = self._pi.wave_create()
-        if wid < 0:
-            raise MotorError(f"pigpio wave_create failed ({wid})")
-        return wid
-
     def stop(self) -> None:
-        self._stop_wave()
-        self._pi.write(self._step, 0)
-        self.status.running = False
+        self.enable(False)
+        GPIO.output(self._step, GPIO.LOW)
         self.status.direction = 0
 
-    def forward(self, *, steps_per_sec: float) -> None:
-        self._spin(steps_per_sec=float(steps_per_sec), forward=True)
+    def forward(self, pulses: int, *, delay_s: float) -> None:
+        self.move_steps(int(pulses), delay_s=float(delay_s))
 
-    def reverse(self, *, steps_per_sec: float) -> None:
-        self._spin(steps_per_sec=float(steps_per_sec), forward=False)
+    def reverse(self, pulses: int, *, delay_s: float) -> None:
+        self.move_steps(-int(pulses), delay_s=float(delay_s))
 
-    def _spin(self, *, steps_per_sec: float, forward: bool) -> None:
-        if not self.status.enabled:
-            return
-        if steps_per_sec <= 0:
-            raise MotorError("steps_per_sec must be > 0")
-
-        self.stop()
-        self.status.direction = self._set_dir(forward)
-        wid = self._build_wave(steps_per_sec)
-        self._wave_id = wid
-        self._pi.wave_send_repeat(wid)
-        self.status.running = True
-
-    def move_steps(self, steps: int, *, steps_per_sec: float) -> None:
+    def move_steps(self, steps: int, *, delay_s: float) -> None:
         """
         Blocking move of N step pulses.
         Positive steps => forward, negative => reverse.
-        """
-        if not self.status.enabled:
-            return
 
+        delay_s matches your script:
+        HIGH -> sleep(delay_s) -> LOW -> sleep(delay_s)
+        """
         n = int(steps)
         if n == 0:
             return
-        if steps_per_sec <= 0:
-            raise MotorError("steps_per_sec must be > 0")
-
-        # ensure continuous spin is stopped
-        self.stop()
+        if delay_s <= 0:
+            raise MotorError("delay_s must be > 0")
 
         forward = n > 0
         direction = self._set_dir(forward)
+        self.status.direction = direction
+        self.enable(True)
 
-        wid = self._build_wave(steps_per_sec)
-        try:
-            self._pi.wave_send_repeat(wid)
-            time.sleep(abs(n) / float(steps_per_sec))
-            self._pi.wave_tx_stop()
-        finally:
-            try:
-                self._pi.wave_delete(wid)
-            except Exception:
-                pass
-            self._pi.write(self._step, 0)
+        for _ in range(abs(n)):
+            GPIO.output(self._step, GPIO.HIGH)
+            time.sleep(delay_s)
+            GPIO.output(self._step, GPIO.LOW)
+            time.sleep(delay_s)
 
         self.status.steps_sent += direction * abs(n)
+        self.enable(False)
+        self.status.direction = 0
 
-    def move_revolutions(self, revolutions: float, *, rpm: float) -> None:
+    def move_revolutions(self, revolutions: float, *, delay_s: float) -> None:
         """
         Blocking move of N revolutions (can be negative for reverse).
         """
         revs = float(revolutions)
         if abs(revs) < 1e-12:
             return
-        if rpm <= 0:
-            raise MotorError("rpm must be > 0")
 
         steps = int(round(revs * self._pulses_per_rev))
-        steps_per_sec = (rpm * self._pulses_per_rev) / 60.0
-        self.move_steps(steps, steps_per_sec=steps_per_sec)
+        self.move_steps(steps, delay_s=float(delay_s))
 
     def revolutions(self) -> float:
         return self.status.steps_sent / float(self._pulses_per_rev)
 
 
 if __name__ == "__main__":
-    motor = Tb6600Motor(step_gpio=17, dir_gpio=27, ena_gpio=22)
-    motor.forward(steps_per_sec=100)
-    time.sleep(1)
-    motor.reverse(steps_per_sec=100)
-    time.sleep(1)
-    motor.stop()
-    motor.close()
+    # Demo based on your script (forward/reverse cycles)
+    PUL = 17
+    DIR = 27
+    ENA = 22
+
+    duration_fwd = 5000
+    duration_bwd = 5000
+    delay = 0.0000001
+    cycles = 3
+
+    print("PUL = GPIO 17 - RPi 3B-Pin #11")
+    print("DIR = GPIO 27 - RPi 3B-Pin #13")
+    print("ENA = GPIO 22 - RPi 3B-Pin #15")
+    print("Initialization Completed")
+    print(f"Duration Fwd set to {duration_fwd}")
+    print(f"Duration Bwd set to {duration_bwd}")
+    print(f"Speed set to {delay}")
+    print(f"number of Cycles to Run set to {cycles}")
+
+    motor = Tb6600Motor(step_gpio=PUL, dir_gpio=DIR, ena_gpio=ENA, pulses_per_rev=1600, active_high_enable=True)
+    try:
+        for i in range(cycles):
+            motor.forward(duration_fwd, delay_s=delay)
+            time.sleep(0.5)
+            motor.reverse(duration_bwd, delay_s=delay)
+            time.sleep(0.5)
+            print(f"Number of cycles completed: {i + 1}")
+            print(f"Number of cycles remaining: {cycles - (i + 1)}")
+            print(f"Total revolutions (net): {motor.revolutions():.6f}")
+    finally:
+        motor.close()
+        print("Cycling Completed")
