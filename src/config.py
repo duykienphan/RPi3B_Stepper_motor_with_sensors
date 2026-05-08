@@ -41,8 +41,17 @@ class StepperConfig:
     # microstep=8 => 200*8 = 1600 pulses per revolution.
     microstep: int = 8
     invert_dir: bool = False
-    step_pulse_us: int = 5
     active_high_enable: bool = True
+    # For RPi.GPIO driver: delay between STEP pin toggles (seconds).
+    # Smaller -> faster. Start conservative (100-500 us) and decrease carefully.
+    step_delay_s: float = 0.0001
+
+
+@dataclass(frozen=True)
+class StepperControlConfig:
+    x_threshold_g: float = 0.3
+    batch_pulses: int = 200  # pulses per batch while "spinning"
+    poll_s: float = 0.02     # how often to re-check x_g when stopped
 
 
 @dataclass(frozen=True)
@@ -56,5 +65,6 @@ class AppConfig:
     adxl345: Adxl345Config = Adxl345Config()
     ds18b20: Ds18b20Config = Ds18b20Config()
     stepper: StepperConfig = StepperConfig()
+    stepper_control: StepperControlConfig = StepperControlConfig()
     logging: LoggingConfig = LoggingConfig()
 

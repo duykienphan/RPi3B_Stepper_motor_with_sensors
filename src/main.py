@@ -10,6 +10,7 @@ from pathlib import Path
 from src.adxl345 import Adxl345, Adxl345Error
 from src.config import AppConfig
 from src.ds18b20 import Ds18b20, Ds18b20Error
+from src.motor_tb6600 import MotorError, Tb6600Motor
 
 
 class PeriodicWorker(threading.Thread):
@@ -51,6 +52,11 @@ def run_app(cfg: AppConfig) -> None:
     # Sensors
     ds = Ds18b20(base_path=cfg.ds18b20.base_path)
     adxl: Adxl345 | None = None
+    motor: Tb6600Motor | None = None
+
+    # Shared state for motor control
+    state_lock = threading.Lock()
+    latest_x_g: float = 0.0
 
     try:
         adxl = Adxl345(
@@ -64,12 +70,27 @@ def run_app(cfg: AppConfig) -> None:
     except Exception as e:
         raise Adxl345Error(str(e))
 
+    try:
+        motor = Tb6600Motor(
+            step_gpio=cfg.stepper.pins.step_gpio,
+            dir_gpio=cfg.stepper.pins.dir_gpio,
+            ena_gpio=cfg.stepper.pins.ena_gpio,
+            pulses_per_rev=cfg.stepper.steps_per_rev * cfg.stepper.microstep,
+            invert_dir=cfg.stepper.invert_dir,
+            active_high_enable=cfg.stepper.active_high_enable,
+        )
+    except MotorError:
+        motor = None
+
     ds_csv = "ds18b20_data.csv"
     adxl_csv = "adxl345_data.csv"
 
     def adxl_fn() -> None:
         assert adxl is not None
         s = adxl.sample()
+        nonlocal latest_x_g
+        with state_lock:
+            latest_x_g = float(s.x_g)
         _append_csv_row(
             adxl_csv,
             fieldnames=["t", "x_g", "y_g", "z_g"],
@@ -99,6 +120,52 @@ def run_app(cfg: AppConfig) -> None:
     adxl_worker.start()
     ds_worker.start()
 
+    class StepperWorker(threading.Thread):
+        def __init__(self) -> None:
+            super().__init__(daemon=True, name="Tb6600Worker")
+            self._last_cmd: int = 0  # -1,0,+1
+
+        def run(self) -> None:
+            if motor is None:
+                return
+            thr = float(cfg.stepper_control.x_threshold_g)
+            batch = max(1, int(cfg.stepper_control.batch_pulses))
+            delay_s = max(1e-6, float(cfg.stepper.step_delay_s))
+            poll_s = max(0.001, float(cfg.stepper_control.poll_s))
+
+            while not stop_evt.is_set():
+                with state_lock:
+                    x = float(latest_x_g)
+
+                cmd = 0
+                if x > thr:
+                    cmd = 1
+                elif x < -thr:
+                    cmd = -1
+
+                if cmd == 0:
+                    if self._last_cmd != 0:
+                        motor.stop()
+                        self._last_cmd = 0
+                    time.sleep(poll_s)
+                    continue
+
+                # "Spin" by sending pulses in small batches so direction can change quickly.
+                if cmd != self._last_cmd:
+                    motor.stop()
+                    self._last_cmd = cmd
+                    time.sleep(0.05)  # small pause after direction change
+
+                try:
+                    motor.move_steps(cmd * batch, delay_s=delay_s)
+                except Exception:
+                    # Keep thread alive; next loop may recover.
+                    time.sleep(0.1)
+
+    stepper_worker: StepperWorker | None = StepperWorker() if motor is not None else None
+    if stepper_worker is not None:
+        stepper_worker.start()
+
     def _handle(_sig, _frame) -> None:
         stop_evt.set()
 
@@ -113,9 +180,16 @@ def run_app(cfg: AppConfig) -> None:
 
         adxl_worker.join(timeout=2.0)
         ds_worker.join(timeout=2.0)
+        if stepper_worker is not None:
+            stepper_worker.join(timeout=2.0)
         try:
             if adxl is not None:
                 adxl.close()
+        except Exception:
+            pass
+        try:
+            if motor is not None:
+                motor.close()
         except Exception:
             pass
 
