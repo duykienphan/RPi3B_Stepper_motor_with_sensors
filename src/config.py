@@ -49,7 +49,7 @@ class StepperConfig:
 
 @dataclass(frozen=True)
 class StepperControlConfig:
-    x_threshold_g: float = 0.3
+    x_threshold_g: float = 0.1
     batch_pulses: int = 200  # pulses per batch while "spinning"
     poll_s: float = 0.02     # how often to re-check x_g when stopped
 
