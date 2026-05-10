@@ -7,8 +7,8 @@ Raspberry Pi 3B+ Python project to read:
 
 `src/main.py` runs **two background threads** (one per sensor) and appends readings to:
 
-- `ds18b20_data.csv`
-- `adxl345_data.csv`
+- `src/log/ds18b20_data.csv`
+- `src/log/adxl345_data.csv`
 
 ## Hardware prerequisites (Pi)
 
@@ -45,7 +45,7 @@ Raspberry Pi 3B+ Python project to read:
 Run the script below to create a venv and install dependencies (on Raspberry Pi):
 
 ```bash
-./setup_env.sh
+./script/setup_env.sh
 ```
 
 Notes:
@@ -64,14 +64,14 @@ Stop with `Ctrl+C`. The program handles SIGINT/SIGTERM and will stop both thread
 
 ## Output files
 
-### `ds18b20_data.csv`
+### `src/log/ds18b20_data.csv`
 
 Columns:
 - `t`: unix timestamp (seconds)
 - `c`: temperature (°C)
 - `device_id`: DS18B20 device id (e.g. `28-...`)
 
-### `adxl345_data.csv`
+### `src/log/adxl345_data.csv`
 
 Columns:
 - `t`: unix timestamp (seconds)
@@ -79,7 +79,7 @@ Columns:
 
 ## Configuration
 
-Default settings are in `src/config.py` (`AppConfig`), including:
+Default settings are in `src/common/config.py` (`AppConfig`), including:
 
 - DS18B20 poll interval (`ds18b20.poll_s`, `ds18b20.base_path`)
 - ADXL345 SPI settings (`adxl345.spi.bus`, `adxl345.spi.device`, speed, mode) and sample rate (`adxl345.sample_hz`)

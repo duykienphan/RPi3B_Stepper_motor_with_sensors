@@ -157,7 +157,7 @@ if __name__ == "__main__":
     # Demo based on your script (forward/reverse cycles).
     # Pull GPIO mapping + microstep from AppConfig when available.
     try:
-        from src.config import AppConfig  # type: ignore
+        from src.common.config import AppConfig  # type: ignore
 
         cfg = AppConfig()
         PUL = cfg.stepper.pins.step_gpio

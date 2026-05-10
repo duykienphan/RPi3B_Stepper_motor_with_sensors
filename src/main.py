@@ -7,10 +7,10 @@ import threading
 import time
 from pathlib import Path
 
-from src.adxl345 import Adxl345, Adxl345Error
-from src.config import AppConfig
-from src.ds18b20 import Ds18b20, Ds18b20Error
-from src.motor_tb6600 import MotorError, Tb6600Motor
+from src.sensors.adxl345 import Adxl345, Adxl345Error
+from src.common.config import AppConfig
+from src.sensors.ds18b20 import Ds18b20, Ds18b20Error
+from src.stepper.motor_tb6600 import MotorError, Tb6600Motor
 
 
 class PeriodicWorker(threading.Thread):
@@ -82,8 +82,8 @@ def run_app(cfg: AppConfig) -> None:
     except MotorError:
         motor = None
 
-    ds_csv = "ds18b20_data.csv"
-    adxl_csv = "adxl345_data.csv"
+    ds_csv = "src/log/ds18b20_data.csv"
+    adxl_csv = "src/log/adxl345_data.csv"
 
     def adxl_fn() -> None:
         assert adxl is not None

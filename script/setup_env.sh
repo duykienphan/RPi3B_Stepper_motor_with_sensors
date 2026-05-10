@@ -3,10 +3,10 @@ set -e  # Exit immediately if a command exits with a non-zero status
 
 # Config
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT_DIR="$SCRIPT_DIR"
+ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 VENV_DIR="$ROOT_DIR/.venv"
 PYTHON_VERSION="3.13"
-REQUIREMENTS_FILE="$ROOT_DIR/requirements.txt"
+REQUIREMENTS_FILE="$SCRIPT_DIR/requirements.txt"
 
 # Detect Python 3.13
 PYTHON_BIN=""
